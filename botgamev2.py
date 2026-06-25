@@ -10,9 +10,7 @@ from telebot import types
 
 # ---------------- CONFIG ----------------
 # IMPORTANT: Replace 'YOUR_BOT_TOKEN_HERE' with your token OR set the BOT_TOKEN env var.
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "8905207289:AAFTuQxUAk3bevp5p_74ID48bg3kZHoOU0A"
-if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-    raise SystemExit("ERROR: BOT_TOKEN is not set. Put your token in BOT_TOKEN variable or set BOT_TOKEN env var.")
+BOT_TOKEN = os.getenv("BOT_TOKEN") 
 
 bot = AsyncTeleBot(BOT_TOKEN)
 
