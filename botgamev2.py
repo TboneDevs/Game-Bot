@@ -9,10 +9,7 @@ from telebot.async_telebot import AsyncTeleBot
 from telebot import types
 
 # ============ CONFIG ============
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "8905207289:AAFTuQxUAk3bevp5p_74ID48bg3kZHoOU0A"
-if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-    raise SystemExit("ERROR: BOT_TOKEN is not set.")
-
+BOT_TOKEN = os.getenv("BOT_TOKEN") 
 bot = AsyncTeleBot(BOT_TOKEN)
 
 OWNER_ID = 6531314640
