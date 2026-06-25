@@ -9,7 +9,10 @@ from telebot.async_telebot import AsyncTeleBot
 from telebot import types
 
 # ============ CONFIG ============
-BOT_TOKEN = os.getenv("BOT_TOKEN") 
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "8905207289:AAFTuQxUAk3bevp5p_74ID48bg3kZHoOU0A"
+if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+    raise SystemExit("ERROR: BOT_TOKEN is not set.")
+
 bot = AsyncTeleBot(BOT_TOKEN)
 
 OWNER_ID = 6531314640
@@ -26,6 +29,7 @@ claim_tokens = {}
 leaderboard_cache = {}
 tournaments = {}
 auto_tasks = {}
+player_answered = {}  # NEW: Track who answered
 
 admin_states = {}
 inventory_lock = Lock()
@@ -95,7 +99,16 @@ def ensure_tournament(chat_id):
             'current_round': 1,
             'answered_users': [],
             'tic_tac_toe_board': None,
-            'auto_end_at': None
+            'tic_tac_toe_players': [],
+            'tic_tac_toe_current_player': None,
+            'tic_tac_toe_timer': 0,
+            'tic_tac_toe_msg_id': None,
+            'rps_current_match': [],
+            'rps_timer': 0,
+            'rps_msg_id': None,
+            'auto_end_at': None,
+            'tournament_winner': None,
+            'match_history': []
         }
     return tournaments[key]
 
@@ -344,8 +357,15 @@ async def set_game(message):
         t['current_round'] = 1
         t['answered_users'] = []
         t['tic_tac_toe_board'] = None
+        t['tic_tac_toe_players'] = []
+        t['tic_tac_toe_current_player'] = None
+        t['rps_current_match'] = []
+        t['tournament_winner'] = None
+        t['match_history'] = []
         t.pop('auto_end_at', None)
         save_tournaments()
+        # Clear player answered tracking
+        player_answered[chat_id] = {}
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🎮 JOIN BRACKET", callback_data="join_game"))
         lobby_text = (
@@ -433,6 +453,8 @@ async def start_game(message):
             await bot.delete_message(chat_id, t['last_msg_id'])
         except Exception:
             pass
+    # Clear player answered tracking
+    player_answered[chat_id] = {}
     await bot.send_message(chat_id, "🏁 <b>Round 1 — Game started!</b>", parse_mode="HTML")
     await trigger_next_round(chat_id)
 
@@ -445,21 +467,36 @@ async def trigger_next_round(chat_id):
 
     t['answered_users'] = []
     t['eliminated_this_round'] = []
+    if chat_id not in player_answered:
+        player_answered[chat_id] = {}
+    else:
+        player_answered[chat_id] = {}
     save_tournaments()
 
     if len(players) == 1:
         await declare_champion(chat_id, [players[0]])
         return
-    elif len(players) == 2 and "RPS" in game_name:
-        await play_rps_bracket(chat_id, players, round_num)
-        return
-    elif len(players) == 2 and "Tic-Tac-Toe" in game_name:
-        await play_tic_tac_toe(chat_id, players, round_num)
-        return
     elif len(players) == 0:
         await bot.send_message(chat_id, "💀 <b>GAME OVER:</b> Everyone was eliminated! No winners this time.", parse_mode="HTML")
         return
+    
+    # Check if game is RPS or Tic-Tac-Toe
+    if "RPS" in game_name or "Rock" in game_name:
+        if len(players) == 2:
+            await play_rps_bracket(chat_id, players, round_num)
+        else:
+            await play_random_game(chat_id, players, round_num)
+        return
+    elif "Tic-Tac-Toe" in game_name:
+        if len(players) >= 2:
+            await play_tic_tac_toe_tournament(chat_id, players, round_num)
+        else:
+            await declare_champion(chat_id, [players[0]])
+        return
+    
+    await play_random_game(chat_id, players, round_num)
 
+async def play_random_game(chat_id, players, round_num):
     game_modes = ['Math Prodigy', 'Reaction Test', 'Russian Roulette', 'Minefield', 'Lucky Dice', 'Reflex Master', 'Safe Cracker']
     selected_game = random.choice(game_modes)
     
@@ -480,7 +517,7 @@ async def trigger_next_round(chat_id):
 
 # ============ GAME IMPLEMENTATIONS ============
 
-# MATH PRODIGY
+# MATH PRODIGY - 25 SECONDS
 async def play_math_prodigy(chat_id, players, round_num):
     q_data = random.choice(HARDCORE_QUESTIONS)
     correct = q_data['a']
@@ -495,13 +532,13 @@ async def play_math_prodigy(chat_id, players, round_num):
         f"╚════════════════════════╝\n"
         f"👥 <b>ALIVE:</b> {', '.join(players)}\n\n"
         f"🧠 <b>SOLVE FAST:</b> <code>{q_data['q']}</code>\n\n"
-        f"⏳ 12 SECONDS TIMER!"
+        f"⏳ 25 SECONDS TIMER!"
     )
     msg = await bot.send_message(chat_id, round_text, parse_mode="HTML", reply_markup=markup)
-    await asyncio.sleep(12)
+    await asyncio.sleep(25)
     await process_round_results(chat_id, msg, players)
 
-# REACTION TEST
+# REACTION TEST - 25 SECONDS
 async def play_reaction_test(chat_id, players, round_num):
     target = random.choice(["💎", "🔮", "💍"])
     items = ["👁️", "📦", "🔮", "💧", "💎", "💍"]
@@ -514,13 +551,13 @@ async def play_reaction_test(chat_id, players, round_num):
         f"⚡ <b>REACTION TEST — ROUND {round_num}</b>\n"
         f"👥 <b>ALIVE:</b> {', '.join(players)}\n\n"
         f"🎯 <b>FIND THE TARGET:</b> {target}\n\n"
-        f"⏳ 8 SECONDS!"
+        f"⏳ 25 SECONDS!"
     )
     msg = await bot.send_message(chat_id, round_text, parse_mode="HTML", reply_markup=markup)
-    await asyncio.sleep(8)
+    await asyncio.sleep(25)
     await process_round_results(chat_id, msg, players)
 
-# RUSSIAN ROULETTE
+# RUSSIAN ROULETTE - 10 SECONDS
 async def play_russian_roulette(chat_id, players, round_num):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("🔫 PULL THE TRIGGER", callback_data="russianroulette_pull||roulette"))
@@ -534,7 +571,7 @@ async def play_russian_roulette(chat_id, players, round_num):
     await asyncio.sleep(10)
     await process_round_results(chat_id, msg, players)
 
-# MINEFIELD
+# MINEFIELD - 25 SECONDS
 async def play_minefield(chat_id, players, round_num):
     bomb_door = random.choice(['1', '2', '3', '4'])
     markup = types.InlineKeyboardMarkup()
@@ -547,13 +584,13 @@ async def play_minefield(chat_id, players, round_num):
         f"👥 <b>ALIVE:</b> {', '.join(players)}\n\n"
         f"🚪 <b>CHOOSE A DOOR:</b>\n"
         f"⚠️ One of the doors contains a BOMB!\n\n"
-        f"⏳ 10 SECONDS!"
+        f"⏳ 25 SECONDS!"
     )
     msg = await bot.send_message(chat_id, round_text, parse_mode="HTML", reply_markup=markup)
-    await asyncio.sleep(10)
+    await asyncio.sleep(25)
     await process_round_results(chat_id, msg, players)
 
-# LUCKY DICE
+# LUCKY DICE - 25 SECONDS
 async def play_lucky_dice(chat_id, players, round_num):
     lucky_number = random.choice(['EVEN', 'ODD'])
     markup = types.InlineKeyboardMarkup()
@@ -563,13 +600,13 @@ async def play_lucky_dice(chat_id, players, round_num):
         f"🎰 <b>LUCKY DICE — ROUND {round_num}</b>\n"
         f"👥 <b>ALIVE:</b> {', '.join(players)}\n\n"
         f"🎲 The bot rolled the dice! Choose EVEN or ODD!\n\n"
-        f"⏳ 10 SECONDS!"
+        f"⏳ 25 SECONDS!"
     )
     msg = await bot.send_message(chat_id, round_text, parse_mode="HTML", reply_markup=markup)
-    await asyncio.sleep(10)
+    await asyncio.sleep(25)
     await process_round_results(chat_id, msg, players)
 
-# REFLEX MASTER
+# REFLEX MASTER - 10 SECONDS
 async def play_reflex_master(chat_id, players, round_num):
     green_btn = random.choice(['LEFT', 'CENTER', 'RIGHT'])
     markup = types.InlineKeyboardMarkup()
@@ -589,13 +626,13 @@ async def play_reflex_master(chat_id, players, round_num):
         f"⚡ <b>REFLEX MASTER — ROUND {round_num}</b>\n"
         f"👥 <b>ALIVE:</b> {', '.join(players)}\n\n"
         f"🟢 <b>HIT THE GREEN LIGHT ONLY!</b>\n\n"
-        f"⏳ 8 SECONDS!"
+        f"⏳ 10 SECONDS!"
     )
     msg = await bot.send_message(chat_id, round_text, parse_mode="HTML", reply_markup=markup)
-    await asyncio.sleep(8)
+    await asyncio.sleep(10)
     await process_round_results(chat_id, msg, players)
 
-# SAFE CRACKER
+# SAFE CRACKER - 25 SECONDS
 async def play_safe_cracker(chat_id, players, round_num):
     safe_choice = random.choice(['EVEN', 'ODD'])
     markup = types.InlineKeyboardMarkup()
@@ -605,13 +642,13 @@ async def play_safe_cracker(chat_id, players, round_num):
         f"🔒 <b>SAFE CRACKER — ROUND {round_num}</b>\n"
         f"👥 <b>ALIVE:</b> {', '.join(players)}\n\n"
         f"🎰 The bot picked EVEN or ODD! Guess right!\n\n"
-        f"⏳ 10 SECONDS!"
+        f"⏳ 25 SECONDS!"
     )
     msg = await bot.send_message(chat_id, round_text, parse_mode="HTML", reply_markup=markup)
-    await asyncio.sleep(10)
+    await asyncio.sleep(25)
     await process_round_results(chat_id, msg, players)
 
-# RPS BRACKET - ENGLISH VERSION
+# RPS BRACKET - 10 MINUTES
 async def play_rps_bracket(chat_id, players, round_num):
     bot_choice = random.choice(['ROCK', 'PAPER', 'SCISSORS'])
     markup = types.InlineKeyboardMarkup()
@@ -623,20 +660,40 @@ async def play_rps_bracket(chat_id, players, round_num):
         f"🎮 <b>GAME:</b> Rock, Paper, Scissors\n"
         f"👥 <b>PLAYERS:</b> {' vs '.join(players)}\n\n"
         f"🤖 <b>BOT CHOICE:</b> ??? (Hidden)\n\n"
-        f"⏳ 12 SECONDS!"
+        f"⏳ 10 MINUTES!"
     )
     msg = await bot.send_message(chat_id, round_text, parse_mode="HTML", reply_markup=markup)
-    await asyncio.sleep(12)
+    t = get_tournament(chat_id)
+    t['rps_current_match'] = players
+    t['rps_msg_id'] = msg.message_id
+    t['rps_timer'] = 600
+    save_tournaments()
+    await asyncio.sleep(600)
     await process_rps_results(chat_id, msg, players, bot_choice)
 
-# TIC-TAC-TOE - FIXED 3x3 GRID
-async def play_tic_tac_toe(chat_id, players, round_num):
-    await play_tic_tac_toe_round(chat_id, [' ' for _ in range(9)], players, 0, 15)
+# TIC-TAC-TOE TOURNAMENT - 30 MINUTES PER MATCH
+async def play_tic_tac_toe_tournament(chat_id, players, round_num):
+    player1 = players[0]
+    player2 = players[1]
+    match_players = [player1, player2]
+    
+    t = get_tournament(chat_id)
+    t['tic_tac_toe_players'] = match_players
+    t['tic_tac_toe_current_player'] = 0
+    t['tic_tac_toe_board'] = [' ' for _ in range(9)]
+    t['tic_tac_toe_timer'] = 1800
+    save_tournaments()
+    
+    await play_tic_tac_toe_round(chat_id, match_players, 0)
 
-async def play_tic_tac_toe_round(chat_id, board, players, current_player, timer):
+async def play_tic_tac_toe_round(chat_id, players, current_player):
+    t = get_tournament(chat_id)
+    board = t.get('tic_tac_toe_board', [' ' for _ in range(9)])
+    timer = t.get('tic_tac_toe_timer', 1800)
+    
     if timer <= 0:
         other_player = players[1 - current_player]
-        await declare_champion(chat_id, [other_player])
+        await declare_tic_tac_toe_winner(chat_id, other_player, players)
         return
     
     def get_board_display():
@@ -660,7 +717,6 @@ async def play_tic_tac_toe_round(chat_id, board, players, current_player, timer)
     board_display = get_board_display()
     markup = types.InlineKeyboardMarkup()
     
-    # Create 3x3 grid with proper positioning
     for i in range(3):
         row_buttons = []
         for j in range(3):
@@ -669,25 +725,22 @@ async def play_tic_tac_toe_round(chat_id, board, players, current_player, timer)
                 btn_text = str(idx + 1)
                 row_buttons.append(types.InlineKeyboardButton(btn_text, callback_data=f"tictactoe_{idx}||{current_player}"))
             else:
-                # Show occupied cell (non-clickable display)
                 symbol = "❌" if board[idx] == 'X' else "⭕"
                 row_buttons.append(types.InlineKeyboardButton(symbol, callback_data=f"tictactoe_blocked_{idx}"))
         markup.row(*row_buttons)
     
+    minutes_left = timer // 60
+    seconds_left = timer % 60
+    
     round_text = (
-        f"⚔️ <b>TIC-TAC-TOE FINAL</b>\n"
+        f"⚔️ <b>TIC-TAC-TOE TOURNAMENT</b>\n"
         f"{players[0]} ❌ vs {players[1]} ⭕\n\n"
         f"🎯 <b>Current Turn:</b> {player_name}\n\n"
         f"{board_display}\n\n"
-        f"⏳ {timer} SECONDS REMAINING!"
+        f"⏳ {minutes_left}m {seconds_left}s REMAINING!"
     )
     msg = await bot.send_message(chat_id, round_text, parse_mode="HTML", reply_markup=markup)
-    t = get_tournament(chat_id)
-    t['tic_tac_toe_board'] = board
-    t['tic_tac_toe_current'] = current_player
-    t['tic_tac_toe_players'] = players
     t['tic_tac_toe_msg_id'] = msg.message_id
-    t['tic_tac_toe_timer'] = timer
     save_tournaments()
 
 # ============ RESULT PROCESSING ============
@@ -695,9 +748,11 @@ async def process_round_results(chat_id, msg, players):
     t = get_tournament(chat_id)
     answered = t.get('answered_users', [])
     eliminated = list(set(players) - set(answered))
+    
     for player in eliminated:
         if player in t['players']:
             t['players'].remove(player)
+    
     t['current_round'] = t.get('current_round', 1) + 1
     save_tournaments()
     try:
@@ -710,14 +765,27 @@ async def process_round_results(chat_id, msg, players):
 async def process_rps_results(chat_id, msg, players, bot_choice):
     t = get_tournament(chat_id)
     answered = t.get('answered_users', [])
+    
     survivors = []
-    for player_choice in answered:
-        if check_rps_winner(player_choice, bot_choice):
-            survivors.append(player_choice)
+    for player in players:
+        if player in answered:
+            for choice in answered:
+                if choice in ['ROCK', 'PAPER', 'SCISSORS']:
+                    if check_rps_winner(choice, bot_choice):
+                        if player not in survivors:
+                            survivors.append(player)
+                    break
+    
+    survivors = list(set(survivors))
+    
+    if len(survivors) == 0:
+        survivors = [players[0]]
+    
     eliminated = list(set(players) - set(survivors))
     for player in eliminated:
         if player in t['players']:
             t['players'].remove(player)
+    
     t['current_round'] = t.get('current_round', 1) + 1
     save_tournaments()
     try:
@@ -731,23 +799,113 @@ def check_rps_winner(player_choice, bot_choice):
     wins = {'ROCK': 'SCISSORS', 'PAPER': 'ROCK', 'SCISSORS': 'PAPER'}
     return wins.get(player_choice) == bot_choice or player_choice == bot_choice
 
-# ============ CALLBACK HANDLERS ============
+# ============ CHAMPION DECLARATIONS ============
+async def declare_champion(chat_id, winners):
+    t = get_tournament(chat_id)
+    winner_text = " & ".join(winners)
+    prize_qty = t.get('prize_qty', 1)
+    prize_cat = t.get('prize_cat', 'CPM2 Regular')
+    game_name = t.get('game', 'Unknown Game')
+    
+    for winner in winners:
+        add_win_to_leaderboard(winner)
+    
+    result_msg = (
+        f"🏆 <b>TOURNAMENT CHAMPION!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👑 <b>WINNER:</b> {winner_text}\n"
+        f"🎮 <b>GAME:</b> {game_name}\n"
+        f"🎁 <b>PRIZE:</b> {prize_qty}x {prize_cat} Account(s)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<i>Preparing your reward...</i>"
+    )
+    msg = await bot.send_message(chat_id, result_msg, parse_mode="HTML")
+    
+    await distribute_prize(chat_id, winners, prize_cat, prize_qty, msg.message_id)
+    
+    t['players'] = []
+    t['game'] = None
+    t['answered_users'] = []
+    save_tournaments()
 
-# MATH PRODIGY
+async def declare_tic_tac_toe_winner(chat_id, winner, all_match_players):
+    t = get_tournament(chat_id)
+    
+    for player in all_match_players:
+        if player in t['players']:
+            t['players'].remove(player)
+    
+    if winner not in t['players']:
+        t['players'].append(winner)
+    
+    await bot.send_message(chat_id, f"🏆 <b>{winner} wins the match!</b>\n\nWaiting for next challenger...", parse_mode="HTML")
+    
+    t['current_round'] = t.get('current_round', 1) + 1
+    t['tic_tac_toe_board'] = None
+    t['tic_tac_toe_players'] = []
+    t['tic_tac_toe_current_player'] = None
+    save_tournaments()
+    
+    await asyncio.sleep(2)
+    await trigger_next_round(chat_id)
+
+async def distribute_prize(chat_id, winners, category, qty, msg_id):
+    with inventory_lock:
+        inv = admin_inventory.get(category, [])
+        
+        if len(inv) < qty:
+            error_msg = f"❌ <b>NOT ENOUGH STOCK!</b>\n\nRequired: {qty}x {category}\nAvailable: {len(inv)}"
+            try:
+                await bot.edit_message_text(error_msg, chat_id, msg_id, parse_mode="HTML")
+            except Exception:
+                pass
+            return
+        
+        prizes_to_give = inv[:qty]
+        admin_inventory[category] = inv[qty:]
+        save_inventory(admin_inventory)
+    
+    prize_text = "\n".join([f"<code>{p}</code>" for p in prizes_to_give])
+    
+    reward_msg = (
+        f"✅ <b>PRIZE DISTRIBUTED!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👑 <b>Winners:</b> {', '.join(winners)}\n\n"
+        f"🎁 <b>Your Accounts:</b>\n{prize_text}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>Congratulations!</i>"
+    )
+    try:
+        await bot.edit_message_text(reward_msg, chat_id, msg_id, parse_mode="HTML")
+    except Exception:
+        pass
+
+# ============ CALLBACK HANDLERS - WITH BUTTON LOCK ============
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mathprodigy_'))
 async def handle_math_prodigy(call):
     chat_id = call.message.chat.id
     t = get_tournament(chat_id)
     user = f"@{call.from_user.username}" if call.from_user.username else call.from_user.first_name
+    
+    # Check if player already answered
+    if chat_id not in player_answered:
+        player_answered[chat_id] = {}
+    if user in player_answered[chat_id]:
+        await bot.answer_callback_query(call.id, "❌ You already answered!", show_alert=False)
+        return
+    
     if user not in t.get('players', []):
         await bot.answer_callback_query(call.id, "You are just a spectator!", show_alert=True)
         return
-    if user in t.get('answered_users', []):
-        await bot.answer_callback_query(call.id, "You already answered!", show_alert=True)
-        return
+    
     data_parts = call.data.replace('mathprodigy_', '').split('||')
     selected = data_parts[0]
     correct = data_parts[1]
+    
+    # Mark as answered
+    player_answered[chat_id][user] = True
+    
     if selected == correct:
         t['answered_users'].append(user)
         save_tournaments()
@@ -755,143 +913,203 @@ async def handle_math_prodigy(call):
     else:
         await bot.answer_callback_query(call.id, "💥 WRONG! ELIMINATED!", show_alert=True)
 
-# REACTION TEST
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reactiontest_'))
 async def handle_reaction_test(call):
     chat_id = call.message.chat.id
     t = get_tournament(chat_id)
     user = f"@{call.from_user.username}" if call.from_user.username else call.from_user.first_name
+    
+    if chat_id not in player_answered:
+        player_answered[chat_id] = {}
+    if user in player_answered[chat_id]:
+        await bot.answer_callback_query(call.id, "❌ You already answered!", show_alert=False)
+        return
+    
     if user not in t.get('players', []):
         return
+    
     data = call.data.replace('reactiontest_', '').split('||')
     chosen = data[0]
     target = data[1]
+    
+    player_answered[chat_id][user] = True
+    
     if chosen == target:
-        if user not in t.get('answered_users', []):
-            t['answered_users'].append(user)
-            save_tournaments()
-            await bot.answer_callback_query(call.id, "✅ Found it! You're safe!")
+        t['answered_users'].append(user)
+        save_tournaments()
+        await bot.answer_callback_query(call.id, "✅ Found it! You're safe!")
     else:
         await bot.answer_callback_query(call.id, "❌ Wrong! ELIMINATED!", show_alert=True)
 
-# RUSSIAN ROULETTE
 @bot.callback_query_handler(func=lambda call: call.data.startswith('russianroulette_'))
 async def handle_russian_roulette(call):
     chat_id = call.message.chat.id
     t = get_tournament(chat_id)
     user = f"@{call.from_user.username}" if call.from_user.username else call.from_user.first_name
+    
+    if chat_id not in player_answered:
+        player_answered[chat_id] = {}
+    if user in player_answered[chat_id]:
+        await bot.answer_callback_query(call.id, "❌ You already answered!", show_alert=False)
+        return
+    
     if user not in t.get('players', []):
         return
-    if user not in t.get('answered_users', []):
-        if random.choice([True, False, False, False]):
-            await bot.answer_callback_query(call.id, "💥 BOOM! You're eliminated!", show_alert=True)
-        else:
-            t['answered_users'].append(user)
-            save_tournaments()
-            await bot.answer_callback_query(call.id, "✅ Click... You lived!")
+    
+    player_answered[chat_id][user] = True
+    
+    if random.choice([True, False, False, False]):
+        await bot.answer_callback_query(call.id, "💥 BOOM! You're eliminated!", show_alert=True)
+    else:
+        t['answered_users'].append(user)
+        save_tournaments()
+        await bot.answer_callback_query(call.id, "✅ Click... You lived!")
 
-# MINEFIELD
 @bot.callback_query_handler(func=lambda call: call.data.startswith('minefield_'))
 async def handle_minefield(call):
     chat_id = call.message.chat.id
     t = get_tournament(chat_id)
     user = f"@{call.from_user.username}" if call.from_user.username else call.from_user.first_name
+    
+    if chat_id not in player_answered:
+        player_answered[chat_id] = {}
+    if user in player_answered[chat_id]:
+        await bot.answer_callback_query(call.id, "❌ You already answered!", show_alert=False)
+        return
+    
     if user not in t.get('players', []):
         return
+    
     data = call.data.replace('minefield_', '').split('||')
     chosen = data[0]
     bomb = data[1]
+    
+    player_answered[chat_id][user] = True
+    
     if chosen == bomb:
         await bot.answer_callback_query(call.id, "💣 BOOM! ELIMINATED!", show_alert=True)
     else:
-        if user not in t.get('answered_users', []):
-            t['answered_users'].append(user)
-            save_tournaments()
-            await bot.answer_callback_query(call.id, "✅ Safe! You advance!")
+        t['answered_users'].append(user)
+        save_tournaments()
+        await bot.answer_callback_query(call.id, "✅ Safe! You advance!")
 
-# LUCKY DICE
 @bot.callback_query_handler(func=lambda call: call.data.startswith('luckydice_'))
 async def handle_lucky_dice(call):
     chat_id = call.message.chat.id
     t = get_tournament(chat_id)
     user = f"@{call.from_user.username}" if call.from_user.username else call.from_user.first_name
+    
+    if chat_id not in player_answered:
+        player_answered[chat_id] = {}
+    if user in player_answered[chat_id]:
+        await bot.answer_callback_query(call.id, "❌ You already answered!", show_alert=False)
+        return
+    
     if user not in t.get('players', []):
         return
+    
     data = call.data.replace('luckydice_', '').split('||')
     chosen = data[0]
     correct = data[1]
+    
+    player_answered[chat_id][user] = True
+    
     if chosen == correct:
-        if user not in t.get('answered_users', []):
-            t['answered_users'].append(user)
-            save_tournaments()
-            await bot.answer_callback_query(call.id, "🎉 Lucky! You pass!")
+        t['answered_users'].append(user)
+        save_tournaments()
+        await bot.answer_callback_query(call.id, "🎉 Lucky! You pass!")
     else:
         await bot.answer_callback_query(call.id, "❌ Bad luck! ELIMINATED!", show_alert=True)
 
-# REFLEX MASTER
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reflexmaster_'))
 async def handle_reflex_master(call):
     chat_id = call.message.chat.id
     t = get_tournament(chat_id)
     user = f"@{call.from_user.username}" if call.from_user.username else call.from_user.first_name
+    
+    if chat_id not in player_answered:
+        player_answered[chat_id] = {}
+    if user in player_answered[chat_id]:
+        await bot.answer_callback_query(call.id, "❌ You already answered!", show_alert=False)
+        return
+    
     if user not in t.get('players', []):
         return
+    
     data = call.data.replace('reflexmaster_', '').split('||')
     chosen = data[0]
+    
+    player_answered[chat_id][user] = True
+    
     if chosen == 'GREEN':
-        if user not in t.get('answered_users', []):
-            t['answered_users'].append(user)
-            save_tournaments()
-            await bot.answer_callback_query(call.id, "⚡ Perfect! You're safe!")
+        t['answered_users'].append(user)
+        save_tournaments()
+        await bot.answer_callback_query(call.id, "⚡ Perfect! You're safe!")
     else:
         await bot.answer_callback_query(call.id, "❌ Wrong! ELIMINATED!", show_alert=True)
 
-# SAFE CRACKER
 @bot.callback_query_handler(func=lambda call: call.data.startswith('safecracker_'))
 async def handle_safe_cracker(call):
     chat_id = call.message.chat.id
     t = get_tournament(chat_id)
     user = f"@{call.from_user.username}" if call.from_user.username else call.from_user.first_name
+    
+    if chat_id not in player_answered:
+        player_answered[chat_id] = {}
+    if user in player_answered[chat_id]:
+        await bot.answer_callback_query(call.id, "❌ You already answered!", show_alert=False)
+        return
+    
     if user not in t.get('players', []):
         return
+    
     data = call.data.replace('safecracker_', '').split('||')
     chosen = data[0]
     correct = data[1]
+    
+    player_answered[chat_id][user] = True
+    
     if chosen == correct:
-        if user not in t.get('answered_users', []):
-            t['answered_users'].append(user)
-            save_tournaments()
-            await bot.answer_callback_query(call.id, "🎉 You pass!")
+        t['answered_users'].append(user)
+        save_tournaments()
+        await bot.answer_callback_query(call.id, "🎉 You pass!")
     else:
         await bot.answer_callback_query(call.id, "❌ Bad luck! ELIMINATED!", show_alert=True)
 
-# RPS BRACKET - ENGLISH
 @bot.callback_query_handler(func=lambda call: call.data.startswith('rpsgame_'))
 async def handle_rps_bracket(call):
     chat_id = call.message.chat.id
     t = get_tournament(chat_id)
     user = f"@{call.from_user.username}" if call.from_user.username else call.from_user.first_name
+    
+    if chat_id not in player_answered:
+        player_answered[chat_id] = {}
+    if user in player_answered[chat_id]:
+        await bot.answer_callback_query(call.id, "❌ You already answered!", show_alert=False)
+        return
+    
     if user not in t.get('players', []):
         return
+    
     data = call.data.replace('rpsgame_', '').split('||')
     chosen = data[0]
     bot_choice = data[1]
+    
+    player_answered[chat_id][user] = True
+    
     if check_rps_winner(chosen, bot_choice):
-        if user not in t.get('answered_users', []):
-            t['answered_users'].append(user)
-            save_tournaments()
-            await bot.answer_callback_query(call.id, "✅ Win/Tie! You're safe!")
+        t['answered_users'].append(user)
+        save_tournaments()
+        await bot.answer_callback_query(call.id, "✅ Win/Tie! You're safe!")
     else:
         await bot.answer_callback_query(call.id, "💥 You LOSE! ELIMINATED!", show_alert=True)
 
-# TIC-TAC-TOE - 3x3 GRID
 @bot.callback_query_handler(func=lambda call: call.data.startswith('tictactoe_'))
 async def handle_tic_tac_toe(call):
     chat_id = call.message.chat.id
     t = get_tournament(chat_id)
     user = f"@{call.from_user.username}" if call.from_user.username else call.from_user.first_name
     
-    # Ignore blocked buttons
     if 'blocked' in call.data:
         await bot.answer_callback_query(call.id, "Cell already taken!", show_alert=False)
         return
@@ -900,135 +1118,55 @@ async def handle_tic_tac_toe(call):
     position = int(data[0])
     player_idx = int(data[1])
     players = t.get('tic_tac_toe_players', [])
+    
     if not players or user != players[player_idx]:
         await bot.answer_callback_query(call.id, "Not your turn!", show_alert=True)
         return
+    
     board = t.get('tic_tac_toe_board', [])
     if board[position] != ' ':
         await bot.answer_callback_query(call.id, "Already taken!", show_alert=True)
         return
+    
     board[position] = 'X' if player_idx == 0 else 'O'
     
+    # Check for win
     win_patterns = [[0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6]]
     for pattern in win_patterns:
         if board[pattern[0]] == board[pattern[1]] == board[pattern[2]] != ' ':
-            await bot.answer_callback_query(call.id, "🎉 You won!")
-            await declare_champion(call.message.chat.id, [players[player_idx]])
+            winner = players[player_idx]
+            await declare_tic_tac_toe_winner(chat_id, winner, players)
             return
     
-    if all(cell != ' ' for cell in board):
-        await bot.answer_callback_query(call.id, "Draw! Random winner...")
-        await declare_champion(call.message.chat.id, [random.choice(players)])
+    # Check for draw
+    if ' ' not in board:
+        await bot.send_message(chat_id, "🤝 It's a DRAW! Both advance to next round!", parse_mode="HTML")
+        t['current_round'] = t.get('current_round', 1) + 1
+        for p in players:
+            if p not in t['players']:
+                t['players'].append(p)
+        save_tournaments()
+        await trigger_next_round(chat_id)
         return
     
-    t['tic_tac_toe_board'] = board
-    t['tic_tac_toe_current'] = 1 - player_idx
+    # Switch turn
+    next_player = 1 - player_idx
+    t['tic_tac_toe_current_player'] = next_player
+    t['tic_tac_toe_timer'] = t.get('tic_tac_toe_timer', 1800) - 1
     save_tournaments()
     
-    await bot.answer_callback_query(call.id, "✅ Move made!")
-    await play_tic_tac_toe_round(chat_id, board, players, 1 - player_idx, t.get('tic_tac_toe_timer', 15) - 1)
-
-# ============ DECLARE CHAMPION ============
-async def declare_champion(chat_id, winners):
-    t = get_tournament(chat_id)
-    prize_category = t.get('prize_cat')
-    prize_quantity = t.get('prize_qty', 0)
-    total_winners = len(winners)
-    prize_per_winner = prize_quantity // total_winners if total_winners > 0 else 0
-    remainder = prize_quantity % total_winners if total_winners > 0 else 0
-    
-    for idx, winner in enumerate(winners):
-        qty = prize_per_winner + (1 if idx < remainder else 0)
-        secret_code = f"GIFT-{random.randint(10000, 99999)}"
-        with claim_tokens_lock:
-            claim_tokens[secret_code] = {"winners": winners, "winner": winner, "category": prize_category, "quantity": qty, "group_size": total_winners}
-            save_claim_tokens(claim_tokens)
-        add_win_to_leaderboard(winner)
-        
-        bot_info = await bot.get_me()
-        clean_url = "t.me/" + bot_info.username
-        
-        if total_winners > 1:
-            champion_text = (f"👑 <b>GROUP WINNERS!</b> 👑\n━━━━━━━━━━━━━━━━━━━━━━━━━━\nYour team won! {', '.join(winners)}\n\n🎁 <b>PRIZE SPLIT (÷{total_winners}):</b>\n👤 {winner} gets: {qty}x {prize_category}\n\n🎫 <b>CODE:</b> <code>{secret_code}</code>\n📥 <b>CLAIM:</b> /claim {secret_code}")
-        else:
-            champion_text = (f"👑 <b>GRAND CHAMPION!</b> 👑\n━━━━━━━━━━━━━━━━━━━━━━━━━━\nYou survived the gauntlet, {winner}!\n🏆 +1 Win registered!\n\n🎫 <b>CODE:</b> <code>{secret_code}</code>\n📥 <b>CLAIM:</b> /claim {secret_code}")
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("📥 CLAIM VIA VM", url=clean_url))
-        await bot.send_message(chat_id, champion_text, parse_mode="HTML", reply_markup=markup)
-
-@bot.message_handler(commands=['claim'])
-async def claim_reward(message):
-    if message.chat.type != "private":
-        return
     try:
-        _, code = message.text.split(" ", 1)
-        code = code.strip()
-    except ValueError:
-        await bot.reply_to(message, "⚠️ Format: /claim GIFT-XXXX", parse_mode="HTML")
-        return
+        await bot.delete_message(chat_id, t.get('tic_tac_toe_msg_id'))
+    except Exception:
+        pass
     
-    if code not in claim_tokens:
-        await bot.reply_to(message, "❌ Invalid or expired code.", parse_mode="HTML")
-        return
-    
-    token_info = claim_tokens[code]
-    sender_username = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
-    
-    if sender_username != token_info['winner']:
-        await bot.reply_to(message, "❌ You are not the registered winner for this code.", parse_mode="HTML")
-        return
-    
-    category = token_info['category']
-    requested_qty = token_info['quantity']
-    group_size = token_info.get('group_size', 1)
-    
-    with inventory_lock:
-        available_stock = len(admin_inventory.get(category, []))
-        dispense_qty = min(requested_qty, available_stock)
-        dispensed_prizes = []
-        for _ in range(dispense_qty):
-            dispensed_prizes.append(admin_inventory[category].pop(0))
-        save_inventory(admin_inventory)
-    
-    with claim_tokens_lock:
-        if code in claim_tokens:
-            del claim_tokens[code]
-            save_claim_tokens(claim_tokens)
-    
-    prize_box_text = "\n".join(dispensed_prizes)
-    
-    if group_size > 1:
-        vm_success_template = ("🎉 <b>GROUP PRIZE CLAIMED!</b> 🎉\n━━━━━━━━━━━━━━━━━━━━━━━━━━\nYour group crushed it! Prize divided equally.\n\n<b>📊 Your Share:</b>\n👤 {player}\n👥 Group Size: {group} players\n🎁 Your Accounts: {qty}\n\n<pre>{accounts}</pre>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚡ Great teamwork! 🔥")
-        message_text = vm_success_template.format(player=token_info['winner'], group=group_size, qty=dispense_qty, accounts=prize_box_text)
-    else:
-        vm_success_template = ("🎉 <b>CONGRATULATIONS!</b> 🎉\n━━━━━━━━━━━━━━━━━━━━━━━━━━\nYou dominated the tournament!\n\n<b>🎁 YOUR REWARD:</b>\n🎮 {category}\n🔢 {qty} account(s)\n\n<pre>{accounts}</pre>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚡ Stay active for more tournaments! 🔥")
-        message_text = vm_success_template.format(category=category, qty=dispense_qty, accounts=prize_box_text)
-    
-    await bot.send_message(message.chat.id, message_text, parse_mode="HTML")
+    await asyncio.sleep(0.5)
+    await play_tic_tac_toe_round(chat_id, players, next_player)
 
-# ============ STARTUP ============
-async def restore_auto_starts():
-    now = int(time.time())
-    for key, t in tournaments.items():
-        chat_id = int(key)
-        end_ts = t.get('auto_end_at')
-        if end_ts and end_ts > now:
-            try:
-                task = asyncio.create_task(_auto_countdown(chat_id))
-                auto_tasks[chat_id] = task
-            except Exception as e:
-                print("Failed to restore auto-start for chat", chat_id, e)
-        else:
-            if end_ts and end_ts <= now:
-                t.pop('auto_end_at', None)
-    save_tournaments()
+# ============ BOT STARTUP ============
+async def main():
+    print("🤖 Bot is running...")
+    await bot.infinity_polling()
 
-if __name__ == '__main__':
-    async def main():
-        await restore_auto_starts()
-        await bot.polling(non_stop=True)
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Shutting down bot...")
+if __name__ == "__main__":
+    asyncio.run(main())
